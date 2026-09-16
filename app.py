@@ -64,36 +64,43 @@ def get_vibrational_family(jersey_num):
         return "Unknown"
 
 # ---------------------------------------------------------
-# DATA FETCHING (BULK LEAGUE STATS + ROSTERS)
+# BULK STATS & ROSTER DATA FETCHING
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
-def fetch_hr_map():
-    """Fetches HR stats in 1 bulk request to avoid API rate limits."""
+def fetch_season_hr_dict():
+    """Fetches season HR totals for ALL hitters in 1 bulk API call."""
     hr_map = {}
+    current_year = datetime.date.today().year
     try:
-        # Pull top 1000 HR leaders for season
-        leaders = statsapi.league_leader_data('homeRuns', limit=1000, statGroup='hitting')
-        for item in leaders:
-            # item format: [rank, player_name, team, hr_str, player_id, ...]
-            if len(item) >= 5:
-                p_id = item[4]
-                try:
-                    hr_map[p_id] = int(item[3])
-                except (ValueError, TypeError):
-                    hr_map[p_id] = 0
+        # Single bulk request for league hitting stats
+        stats_data = statsapi.get('stats', {
+            'stats': 'season',
+            'group': 'hitting',
+            'gameType': 'R',
+            'season': current_year,
+            'limit': 1500
+        })
+        
+        # Parse player HRs
+        for stat_type in stats_data.get('stats', []):
+            for stat_split in stat_type.get('splits', []):
+                p_id = stat_split.get('player', {}).get('id')
+                hrs = stat_split.get('stat', {}).get('homeRuns', 0)
+                if p_id is not None:
+                    hr_map[p_id] = hrs
     except Exception:
         pass
     return hr_map
 
 @st.cache_data(ttl=3600)
 def fetch_active_batters():
-    """Fetches active batters with HR stats mapped efficiently."""
+    """Fetches active batters with accurate season HR totals."""
     try:
         teams = statsapi.get('teams', {'sportId': 1})['teams']
     except Exception:
         return pd.DataFrame()
 
-    hr_dict = fetch_hr_map()
+    hr_dict = fetch_season_hr_dict()
     player_list = []
     
     progress_bar = st.progress(0)
@@ -117,14 +124,14 @@ def fetch_active_batters():
                     
                     if p_id:
                         try:
-                            # Direct person detail call
+                            # Direct person detail call for birth date & primary number
                             person_resp = statsapi.get('person', {'personId': p_id})
                             person_data = person_resp.get('people', [{}])[0]
                             birth_date = person_data.get('birthDate', None)
                             if not jersey:
                                 jersey = person_data.get('primaryNumber', None)
                             
-                            # Fast dictionary lookup for HRs
+                            # Lookup player HR from bulk dictionary
                             player_hrs = hr_dict.get(p_id, 0)
                             
                             if birth_date and jersey is not None:
