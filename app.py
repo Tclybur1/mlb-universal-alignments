@@ -64,17 +64,38 @@ def get_vibrational_family(jersey_num):
         return "Unknown"
 
 # ---------------------------------------------------------
-# DATA FETCHING (MLB STATS API)
+# DATA FETCHING (BULK LEAGUE STATS + ROSTERS)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
+def fetch_hr_map():
+    """Fetches HR stats in 1 bulk request to avoid API rate limits."""
+    hr_map = {}
+    try:
+        # Pull top 1000 HR leaders for season
+        leaders = statsapi.league_leader_data('homeRuns', limit=1000, statGroup='hitting')
+        for item in leaders:
+            # item format: [rank, player_name, team, hr_str, player_id, ...]
+            if len(item) >= 5:
+                p_id = item[4]
+                try:
+                    hr_map[p_id] = int(item[3])
+                except (ValueError, TypeError):
+                    hr_map[p_id] = 0
+    except Exception:
+        pass
+    return hr_map
+
+@st.cache_data(ttl=3600)
 def fetch_active_batters():
-    """Fetches active batters robustly directly from team rosters."""
+    """Fetches active batters with HR stats mapped efficiently."""
     try:
         teams = statsapi.get('teams', {'sportId': 1})['teams']
     except Exception:
         return pd.DataFrame()
 
+    hr_dict = fetch_hr_map()
     player_list = []
+    
     progress_bar = st.progress(0)
     total_teams = len(teams)
     
@@ -96,12 +117,15 @@ def fetch_active_batters():
                     
                     if p_id:
                         try:
-                            # Direct biographical call (lightweight & stable)
+                            # Direct person detail call
                             person_resp = statsapi.get('person', {'personId': p_id})
                             person_data = person_resp.get('people', [{}])[0]
                             birth_date = person_data.get('birthDate', None)
                             if not jersey:
                                 jersey = person_data.get('primaryNumber', None)
+                            
+                            # Fast dictionary lookup for HRs
+                            player_hrs = hr_dict.get(p_id, 0)
                             
                             if birth_date and jersey is not None:
                                 player_list.append({
@@ -109,6 +133,7 @@ def fetch_active_batters():
                                     'Team': team_name,
                                     'Position': pos,
                                     'Jersey': str(jersey),
+                                    'HRs': int(player_hrs),
                                     'BirthDate': birth_date
                                 })
                         except Exception:
@@ -208,14 +233,14 @@ if not df.empty:
         st.subheader(f"Group 1: Universal Day Alignments (Target Root: {universal_day})")
         u_align_df = filtered_df[filtered_df['Jersey_Root'] == universal_day]
         st.metric("Total Players Aligned", len(u_align_df))
-        st.dataframe(u_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Jersey_Root']], use_container_width=True)
+        st.dataframe(u_align_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'BirthDate', 'Jersey_Root']], use_container_width=True)
 
     # TAB 2: Calendar Root Alignment
     with tab2:
         st.subheader(f"Group 2: Calendar Day Root Alignments (Target Root: {calendar_day_root})")
         c_align_df = filtered_df[filtered_df['Jersey_Root'] == calendar_day_root]
         st.metric("Total Players Aligned", len(c_align_df))
-        st.dataframe(c_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Jersey_Root']], use_container_width=True)
+        st.dataframe(c_align_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'BirthDate', 'Jersey_Root']], use_container_width=True)
 
     # TAB 3: Personal Day Alignment
     with tab3:
@@ -223,7 +248,7 @@ if not df.empty:
         target_pd = st.slider("Select Target Personal Day Root", 1, 9, universal_day)
         p_align_df = filtered_df[filtered_df['Personal_Day'] == target_pd]
         st.metric(f"Total Players on Personal Day {target_pd}", len(p_align_df))
-        st.dataframe(p_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Personal_Day']], use_container_width=True)
+        st.dataframe(p_align_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'BirthDate', 'Personal_Day']], use_container_width=True)
 
     # TAB 4: Vibrational Family Matrix
     with tab4:
@@ -242,6 +267,6 @@ if not df.empty:
         else:
             fam_df = filtered_df
             
-        st.dataframe(fam_df[['Player', 'Team', 'Position', 'Jersey', 'Vibrational_Family', 'Jersey_Root']], use_container_width=True)
+        st.dataframe(fam_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'Vibrational_Family', 'Jersey_Root']], use_container_width=True)
 else:
     st.error("Unable to load active roster data from the MLB Stats API.")
