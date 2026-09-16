@@ -85,7 +85,6 @@ def fetch_active_batters():
                 person = entry.get('person', {})
                 pos = entry.get('position', {}).get('abbreviation', '')
                 
-                # Filter out Pitchers (P, TWP, etc. if desired)
                 if pos != 'P':
                     p_id = person.get('id')
                     try:
@@ -112,39 +111,82 @@ def fetch_active_batters():
     progress_bar.empty()
     return pd.DataFrame(player_list)
 
+@st.cache_data(ttl=1800)
+def fetch_daily_matchups(date_str):
+    """Fetches daily game matchups for the selected date."""
+    try:
+        schedule = statsapi.schedule(date=date_str)
+        games = []
+        for game in schedule:
+            away = game.get('away_name', '')
+            home = game.get('home_name', '')
+            if away and home:
+                games.append({
+                    'label': f"{away} @ {home}",
+                    'teams': [away, home]
+                })
+        return games
+    except Exception:
+        return []
+
 # ---------------------------------------------------------
 # UI APP LAYOUT
 # ---------------------------------------------------------
 st.title("⚾ MLB Universal Numerology Alignment Engine")
 st.markdown("Analyze active MLB batters based on **Universal Day**, **Calendar Root**, **Personal Day**, and **Vibrational Family** groupings.")
 
-# Date Selector Sidebar
-st.sidebar.header("Target Date Selection")
+# Sidebar Controls
+st.sidebar.header("Filter Controls")
 selected_date = st.sidebar.date_input("Select Game Date", datetime.date.today())
 
 # Dynamic Date Calculations
 universal_day = reduce_date_str(selected_date)
 calendar_day_root = get_digital_root(selected_date.day)
 
-# Display Key Date Indicators
+# Key Date Metrics
 col1, col2, col3 = st.columns(3)
 col1.metric("Selected Date", selected_date.strftime("%B %d, %Y"))
 col2.metric("Universal Day Root", universal_day)
 col3.metric("Calendar Day Root", calendar_day_root)
 
-# Load Active Player Roster
+# Load Roster Data
 st.write("### Loading Active Batter Data...")
 df = fetch_active_batters()
 
 if not df.empty:
-    # Perform Mathematical Transformations
+    # Calculations
     df['Jersey_Root'] = df['Jersey'].apply(get_digital_root)
     df['Personal_Day'] = df['BirthDate'].apply(lambda bd: get_personal_day(bd, universal_day))
     df['Vibrational_Family'] = df['Jersey'].apply(get_vibrational_family)
 
-    st.success(f"Successfully loaded {len(df)} active batters!")
+    # Load Daily Games for Matchup Filter
+    date_str_formatted = selected_date.strftime("%Y-%m-%d")
+    daily_games = fetch_daily_matchups(date_str_formatted)
 
-    # Tabbed Interface
+    # Add Matchup & Team Sidebar Filters
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Matchup & Team Filters")
+    
+    matchup_options = ["All Games"] + [g['label'] for g in daily_games]
+    selected_matchup = st.sidebar.selectbox("Filter by Game Matchup", matchup_options)
+    
+    all_teams = ["All Teams"] + sorted(df['Team'].unique().tolist())
+    selected_team = st.sidebar.selectbox("Filter by Single Team", all_teams)
+
+    # Apply Matchup / Team Filters to Dataset
+    filtered_df = df.copy()
+
+    if selected_matchup != "All Games":
+        matched_game = next((g for g in daily_games if g['label'] == selected_matchup), None)
+        if matched_game:
+            filtered_df = filtered_df[filtered_df['Team'].isin(matched_game['teams'])]
+
+    if selected_team != "All Teams":
+        filtered_df = filtered_df[filtered_df['Team'] == selected_team]
+
+    st.success(f"Showing {len(filtered_df)} active batters matching filters!")
+
+    # Tabs Interface
     tab1, tab2, tab3, tab4 = st.tabs([
         "🎯 Group 1: Universal Day Alignment",
         "📅 Group 2: Calendar Root Alignment",
@@ -152,48 +194,31 @@ if not df.empty:
         "🏛 Group 4: Vibrational Family Matrix"
     ])
 
-    # ---------------------------------------------------------
     # TAB 1: Universal Day Alignment
-    # ---------------------------------------------------------
     with tab1:
         st.subheader(f"Group 1: Universal Day Alignments (Target Root: {universal_day})")
-        st.markdown(f"Players whose **Jersey Number Digital Root** matches today's Universal Day Number (**{universal_day}**).")
-        
-        u_align_df = df[df['Jersey_Root'] == universal_day]
+        u_align_df = filtered_df[filtered_df['Jersey_Root'] == universal_day]
         st.metric("Total Players Aligned", len(u_align_df))
         st.dataframe(u_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Jersey_Root']], use_container_width=True)
 
-    # ---------------------------------------------------------
     # TAB 2: Calendar Root Alignment
-    # ---------------------------------------------------------
     with tab2:
         st.subheader(f"Group 2: Calendar Day Root Alignments (Target Root: {calendar_day_root})")
-        st.markdown(f"Players whose **Jersey Number Digital Root** matches the Day of the Month Root (**{calendar_day_root}**).")
-        
-        c_align_df = df[df['Jersey_Root'] == calendar_day_root]
+        c_align_df = filtered_df[filtered_df['Jersey_Root'] == calendar_day_root]
         st.metric("Total Players Aligned", len(c_align_df))
         st.dataframe(c_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Jersey_Root']], use_container_width=True)
 
-    # ---------------------------------------------------------
     # TAB 3: Personal Day Alignment
-    # ---------------------------------------------------------
     with tab3:
         st.subheader("Group 3: Personal Day Alignments")
-        st.markdown("Players whose **Personal Day Number** (Birth Month + Birth Day + Universal Day) matches the target universal root or selected filter.")
-        
         target_pd = st.slider("Select Target Personal Day Root", 1, 9, universal_day)
-        p_align_df = df[df['Personal_Day'] == target_pd]
-        
+        p_align_df = filtered_df[filtered_df['Personal_Day'] == target_pd]
         st.metric(f"Total Players on Personal Day {target_pd}", len(p_align_df))
         st.dataframe(p_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Personal_Day']], use_container_width=True)
 
-    # ---------------------------------------------------------
-    # TAB 4: Vibrational Family Subgroups
-    # ---------------------------------------------------------
+    # TAB 4: Vibrational Family Matrix
     with tab4:
         st.subheader("Group 4: Vibrational Family Subgroups")
-        st.markdown("Categorizes all players by their jersey number's alignment to core numerology families.")
-        
         family_option = st.selectbox("Select Family Group", [
             "All",
             "Mind & Thought (1, 5, 7)",
@@ -204,11 +229,10 @@ if not df.empty:
         ])
         
         if family_option != "All":
-            fam_df = df[df['Vibrational_Family'].str.contains(family_option, regex=False, na=False)]
+            fam_df = filtered_df[filtered_df['Vibrational_Family'].str.contains(family_option, regex=False, na=False)]
         else:
-            fam_df = df
+            fam_df = filtered_df
             
         st.dataframe(fam_df[['Player', 'Team', 'Position', 'Jersey', 'Vibrational_Family', 'Jersey_Root']], use_container_width=True)
-
 else:
     st.error("Unable to load active roster data from the MLB Stats API.")
