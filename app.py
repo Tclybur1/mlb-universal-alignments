@@ -68,10 +68,13 @@ def get_vibrational_family(jersey_num):
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_active_batters():
-    """Fetches active batters along with their current season HR totals."""
-    teams = statsapi.get('teams', {'sportId': 1})['teams']
+    """Fetches active batters robustly directly from team rosters."""
+    try:
+        teams = statsapi.get('teams', {'sportId': 1})['teams']
+    except Exception:
+        return pd.DataFrame()
+
     player_list = []
-    
     progress_bar = st.progress(0)
     total_teams = len(teams)
     
@@ -85,35 +88,31 @@ def fetch_active_batters():
                 person = entry.get('person', {})
                 pos = entry.get('position', {}).get('abbreviation', '')
                 
+                # Exclude Pitchers
                 if pos != 'P':
                     p_id = person.get('id')
-                    try:
-                        # Fetch player biographical and season stat details
-                        stat_data = statsapi.player_stat_data(p_id, group="hitting", type="season")
-                        
-                        birth_date = stat_data.get('birth_date', None)
-                        jersey = stat_data.get('primary_number', entry.get('jerseyNumber', None))
-                        name = stat_data.get('first_name', '') + " " + stat_data.get('last_name', '')
-                        if not name.strip():
-                            name = person.get('fullName', '')
-                        
-                        # Extract Home Runs safely from the stats dictionary
-                        hr_count = 0
-                        stats_list = stat_data.get('stats', [])
-                        if stats_list and 'stats' in stats_list[0]:
-                            hr_count = stats_list[0]['stats'].get('homeRuns', 0)
-                        
-                        if birth_date and jersey is not None:
-                            player_list.append({
-                                'Player': name,
-                                'Team': team_name,
-                                'Position': pos,
-                                'Jersey': str(jersey),
-                                'HRs': hr_count,
-                                'BirthDate': birth_date
-                            })
-                    except Exception:
-                        continue
+                    name = person.get('fullName', '')
+                    jersey = entry.get('jerseyNumber', None)
+                    
+                    if p_id:
+                        try:
+                            # Direct biographical call (lightweight & stable)
+                            person_resp = statsapi.get('person', {'personId': p_id})
+                            person_data = person_resp.get('people', [{}])[0]
+                            birth_date = person_data.get('birthDate', None)
+                            if not jersey:
+                                jersey = person_data.get('primaryNumber', None)
+                            
+                            if birth_date and jersey is not None:
+                                player_list.append({
+                                    'Player': name,
+                                    'Team': team_name,
+                                    'Position': pos,
+                                    'Jersey': str(jersey),
+                                    'BirthDate': birth_date
+                                })
+                        except Exception:
+                            continue
         except Exception:
             pass
         
@@ -161,7 +160,6 @@ col2.metric("Universal Day Root", universal_day)
 col3.metric("Calendar Day Root", calendar_day_root)
 
 # Load Roster Data
-st.write("### Loading Active Batter Data...")
 df = fetch_active_batters()
 
 if not df.empty:
@@ -210,14 +208,14 @@ if not df.empty:
         st.subheader(f"Group 1: Universal Day Alignments (Target Root: {universal_day})")
         u_align_df = filtered_df[filtered_df['Jersey_Root'] == universal_day]
         st.metric("Total Players Aligned", len(u_align_df))
-        st.dataframe(u_align_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'BirthDate', 'Jersey_Root']], use_container_width=True)
+        st.dataframe(u_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Jersey_Root']], use_container_width=True)
 
     # TAB 2: Calendar Root Alignment
     with tab2:
         st.subheader(f"Group 2: Calendar Day Root Alignments (Target Root: {calendar_day_root})")
         c_align_df = filtered_df[filtered_df['Jersey_Root'] == calendar_day_root]
         st.metric("Total Players Aligned", len(c_align_df))
-        st.dataframe(c_align_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'BirthDate', 'Jersey_Root']], use_container_width=True)
+        st.dataframe(c_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Jersey_Root']], use_container_width=True)
 
     # TAB 3: Personal Day Alignment
     with tab3:
@@ -225,7 +223,7 @@ if not df.empty:
         target_pd = st.slider("Select Target Personal Day Root", 1, 9, universal_day)
         p_align_df = filtered_df[filtered_df['Personal_Day'] == target_pd]
         st.metric(f"Total Players on Personal Day {target_pd}", len(p_align_df))
-        st.dataframe(p_align_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'BirthDate', 'Personal_Day']], use_container_width=True)
+        st.dataframe(p_align_df[['Player', 'Team', 'Position', 'Jersey', 'BirthDate', 'Personal_Day']], use_container_width=True)
 
     # TAB 4: Vibrational Family Matrix
     with tab4:
@@ -244,6 +242,6 @@ if not df.empty:
         else:
             fam_df = filtered_df
             
-        st.dataframe(fam_df[['Player', 'Team', 'Position', 'Jersey', 'HRs', 'Vibrational_Family', 'Jersey_Root']], use_container_width=True)
+        st.dataframe(fam_df[['Player', 'Team', 'Position', 'Jersey', 'Vibrational_Family', 'Jersey_Root']], use_container_width=True)
 else:
     st.error("Unable to load active roster data from the MLB Stats API.")
